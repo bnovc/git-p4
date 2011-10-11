@@ -1155,9 +1155,7 @@ class P4Sync(Command):
                 optparse.make_option("--keep-path", dest="keepRepoPath", action='store_true',
                                      help="Keep entire BRANCH/DIR/SUBDIR prefix during import"),
                 optparse.make_option("--use-client-spec", dest="useClientSpec", action='store_true',
-                                     help="Only sync files that are included in the Perforce Client Spec"),
-                optparse.make_option("--file-dump", dest="fileDump", action='store_true',
-                                     help="Save file git-p4-dump instead of passing data through to git fast-import. Useful for large repositories.")
+                                     help="Only sync files that are included in the Perforce Client Spec")
         ]
         self.description = """Imports from Perforce into a git repository.\n
     example:
@@ -1165,7 +1163,9 @@ class P4Sync(Command):
     //depot/my/project/@all -- to import everything
     //depot/my/project/@1,6 -- to import only from revision 1 to 6
 
-    (a ... is not needed in the path p4 specification, it's added implicitly)"""
+    (a ... is not needed in the path p4 specification, it's added implicitly)
+
+    The intermediate Perforce content (in git-import format) will be stored to git-p4-dump while processing. You may remove this file after a successful import."""
 
         self.usage += " //depot/path[@revRange]"
         self.silent = False
@@ -1188,7 +1188,6 @@ class P4Sync(Command):
         self.p4BranchesInGit = []
         self.cloneExclude = []
         self.useClientSpec = False
-        self.fileDump = False
         self.clientSpecDirs = []
         self.markCounter = 1
         self.p4FileReader = P4FileReader
@@ -2005,10 +2004,7 @@ class P4Sync(Command):
         
         self.tz = "%+03d%02d" % (- time.timezone / 3600, ((- time.timezone % 3600) / 60))
 
-        if self.fileDump:
-          self.gitStream = open("git-p4-dump", "wb")
-        else:
-          self.gitStream = cStringIO.StringIO()
+        self.gitStream = open("git-p4-dump", "wb")
 
         if revision:
             self.importHeadRevision(revision)
@@ -2060,23 +2056,26 @@ class P4Sync(Command):
                         sys.stdout.write("%s " % b)
                     sys.stdout.write("\n")
 
-        if self.fileDump:
-          print "Finished processing. Data may be manually utilized now (e.g. sent to git fast-import)"
-        else:
-          if self.debug:
-              tmpfile = "%s/p4import" % tempfile.gettempdir()
-              FILE = open(tmpfile, "w")
-              FILE.write(self.gitStream.getvalue())
-              FILE.close()
-              print "Input for 'git fast-import' written to %s\n" % tmpfile
+        self.gitStream.close()
 
-          importProcess = subprocess.Popen(["git", "fast-import"],
-                                           stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                           stderr=subprocess.PIPE);
-          self.gitOutput, self.gitError = importProcess.communicate(self.gitStream.getvalue())
+        if self.debug:
+            tmpfile = "%s/p4import" % tempfile.gettempdir()
+            FILE = open(tmpfile, "w")
+            FILE.write(self.gitStream.getvalue())
+            FILE.close()
+            print "Input for 'git fast-import' written to %s\n" % tmpfile
 
-          if importProcess.returncode != 0:
-              die("fast-import failed: %s" % self.gitError)
+        # Re-open the file for reading
+        self.gitStream = open("git-p4-dump", "r")
+        importProcess = subprocess.Popen(["git", "fast-import"],
+                                         stdin=self.gitStream, stdout=subprocess.PIPE,
+                                         stderr=subprocess.PIPE);
+
+        self.gitOutput, self.gitError = importProcess.communicate()
+        self.gitStream.close()
+
+        if importProcess.returncode != 0:
+            die("fast-import failed: %s" % self.gitError)
 
         return True
 
